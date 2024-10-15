@@ -613,8 +613,11 @@ def _postprocess_messages(messages: List[ConversationMessage]) -> None:
                 and isinstance(message["tool_calls"], list)):
 
             for item in message["tool_calls"]:
+                print("===== i[func][args] ====="*2)
+                print(item["function"]["arguments"])
+                print("===== END i[func][args] ====="*2)
                 item["function"]["arguments"] = json.loads(
-                    item["function"]["arguments"])
+                    item["function"]["arguments"]) if len(item["function"]["arguments"]) > 0 else "[]"
 
 
 def parse_chat_messages(
