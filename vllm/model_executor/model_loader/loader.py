@@ -912,6 +912,9 @@ class BitsAndBytesModelLoader(BaseModelLoader):
         for weight_name, weight_tensor in self._hf_weight_iter(
                 hf_weights_files, use_safetensors):
 
+            if 'vpm' in weight_name or 'resampler' in weight_name:
+                continue
+
             if not weight_name.endswith((".weight", ".bias")):
                 continue
 
@@ -959,6 +962,9 @@ class BitsAndBytesModelLoader(BaseModelLoader):
             if not weight_name.endswith((".weight", ".bias")):
                 continue
 
+            if 'vpm' in weight_name or 'resampler' in weight_name:
+                continue
+
             if (f"{weight_name}.quant_state.bitsandbytes__nf4" \
                     in temp_state_dict) or \
             (f"{weight_name}.quant_state.bitsandbytes__fp4" \
@@ -980,7 +986,8 @@ class BitsAndBytesModelLoader(BaseModelLoader):
                 hf_weights_files, use_safetensors):
 
             if any(target_module in weight_name for target_module in
-                   self.target_modules) and weight_name.endswith(".weight"):
+                   self.target_modules) and weight_name.endswith(".weight") \
+                    and 'vpm' not in weight_name and 'resampler' not in weight_name:
                 weight_name = weight_name.replace(".weight", ".qweight")
 
                 if any(module in weight_name
