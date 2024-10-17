@@ -799,7 +799,7 @@ class MllamaCrossAttentionDecoderLayer(torch.nn.Module):
         self.cross_attn = MllamaTextCrossAttention(
             config=config,
             layer_idx=layer_idx,
-            quant_config=quant_config,
+            quant_config=None,
         )
 
         self.input_layernorm = RMSNorm(config.hidden_size,
@@ -810,7 +810,7 @@ class MllamaCrossAttentionDecoderLayer(torch.nn.Module):
             hidden_size=config.hidden_size,
             intermediate_size=config.intermediate_size,
             hidden_act=config.hidden_act,
-            quant_config=quant_config,
+            quant_config=None,
         )
         self.post_attention_layernorm = RMSNorm(config.hidden_size,
                                                 eps=config.rms_norm_eps)
