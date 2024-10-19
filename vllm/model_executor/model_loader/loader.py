@@ -48,6 +48,9 @@ from vllm.platforms import current_platform
 from vllm.utils import is_pin_memory_available
 
 
+
+BNB_EXCLUSIONS = ['vpm', 'resampler', 'multi_modal_projector', 'vision_tower', 'encoder.layers']
+
 @contextmanager
 def device_loading_context(module: torch.nn.Module,
                            target_device: torch.device):
@@ -912,8 +915,8 @@ class BitsAndBytesModelLoader(BaseModelLoader):
         for weight_name, weight_tensor in self._hf_weight_iter(
                 hf_weights_files, use_safetensors):
 
-            if 'vpm' in weight_name or 'resampler' in weight_name:
-                continue
+            if any(exclusion in weight_name for exclusion in BNB_EXCLUSIONS):
+                yield weight_name, weight_tensor
 
             if not weight_name.endswith((".weight", ".bias")):
                 continue
@@ -962,13 +965,11 @@ class BitsAndBytesModelLoader(BaseModelLoader):
             if not weight_name.endswith((".weight", ".bias")):
                 continue
 
-            if 'vpm' in weight_name or 'resampler' in weight_name:
-                continue
-
-            if (f"{weight_name}.quant_state.bitsandbytes__nf4" \
+            if ((f"{weight_name}.quant_state.bitsandbytes__nf4" \
                     in temp_state_dict) or \
             (f"{weight_name}.quant_state.bitsandbytes__fp4" \
-                    in temp_state_dict):
+                    in temp_state_dict)) and not \
+            any(exclusion in weight_name for exclusion in BNB_EXCLUSIONS):
                 quant_state = _parse_quant_state(weight_name, temp_state_dict)
                 weight_name = weight_name.replace(".weight", ".qweight")
                 quant_state_dict[weight_name] = quant_state
@@ -985,9 +986,11 @@ class BitsAndBytesModelLoader(BaseModelLoader):
         for weight_name, weight_tensor in self._hf_weight_iter(
                 hf_weights_files, use_safetensors):
 
-            if any(target_module in weight_name for target_module in
-                   self.target_modules) and weight_name.endswith(".weight") \
-                    and 'vpm' not in weight_name and 'resampler' not in weight_name:
+
+            if any(target_module in weight_name for target_module in self.target_modules) and \
+               weight_name.endswith(".weight") and not \
+               any(exclusion in weight_name for exclusion in BNB_EXCLUSIONS):
+
                 weight_name = weight_name.replace(".weight", ".qweight")
 
                 if any(module in weight_name
