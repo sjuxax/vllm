@@ -389,6 +389,22 @@ class LlavaOnevisionMultiModalProjector(nn.Module):
 class LlavaOnevisionForConditionalGeneration(nn.Module, SupportsMultiModal,
                                              SupportsPP):
 
+    bitsandbytes_stacked_params_mapping = {
+       # shard_name, weight_name, index
+       "q_proj": ("qkv_proj", 0),
+       "k_proj": ("qkv_proj", 1),
+       "v_proj": ("qkv_proj", 2),
+       "gate_proj": ("gate_up_proj", 0),
+       "up_proj": ("gate_up_proj", 1),
+   }
+
+    default_bitsandbytes_target_modules = [
+        ".q_proj.", ".k_proj.", ".v_proj.",
+        ".up_proj.", ".o_proj.",
+        ".down_proj.", ".gate_proj.",
+        ".fc1.", ".fc2.",
+    ]
+
     def __init__(self,
                  config: LlavaOnevisionConfig,
                  multimodal_config: MultiModalConfig,
