@@ -405,6 +405,11 @@ class LlavaOnevisionMultiModalProjector(nn.Module):
 class LlavaOnevisionForConditionalGeneration(nn.Module, SupportsMultiModal,
                                              SupportsPP):
 
+
+    bitsandbytes_excluded_modules = [
+        'multi_modal_projector', "vision_tower", "encoder.layers"
+    ]
+
     bitsandbytes_stacked_params_mapping = {
        # shard_name, weight_name, index
        "q_proj": ("qkv_proj", 0),
