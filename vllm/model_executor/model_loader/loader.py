@@ -52,8 +52,6 @@ from vllm.utils import is_pin_memory_available
 
 
 
-BNB_EXCLUSIONS = ['vpm', 'resampler', 'multi_modal_projector', 'vision_tower', 'encoder.layers']
-
 @contextmanager
 def device_loading_context(module: torch.nn.Module,
                            target_device: torch.device):
@@ -838,7 +836,7 @@ class BitsAndBytesModelLoader(BaseModelLoader):
         for weight_name, weight_tensor in self._hf_weight_iter(
                 hf_weights_files, use_safetensors):
 
-            if any(exclusion in weight_name for exclusion in BNB_EXCLUSIONS):
+            if any(exclusion in weight_name for exclusion in self.excluded_modules):
                 yield weight_name, weight_tensor
 
             if self._is_8bit_weight_name(weight_name):
@@ -885,13 +883,11 @@ class BitsAndBytesModelLoader(BaseModelLoader):
             if self._is_4bit_weight_name(weight_name):
                 continue
 
-            if ((f"{weight_name}.quant_state.bitsandbytes__nf4"
-                    in temp_state_dict) or (
-                        f"{weight_name}.quant_state.bitsandbytes__fp4"
-                        in temp_state_dict)) \
-                    and not any(
-                            exclusion in weight_name for exclusion in BNB_EXCLUSIONS
-                        ):
+            if ((f"{weight_name}.quant_state.bitsandbytes__nf4" \
+                    in temp_state_dict) or \
+            (f"{weight_name}.quant_state.bitsandbytes__fp4" \
+                    in temp_state_dict)) and not \
+            any(exclusion in weight_name for exclusion in self.excluded_modules):
                 quant_state = _parse_quant_state(weight_name, temp_state_dict)
                 quant_state_dict[weight_name] = quant_state
                 yield weight_name, weight_tensor
@@ -909,7 +905,7 @@ class BitsAndBytesModelLoader(BaseModelLoader):
                 hf_weights_files, use_safetensors):
             if any(target_module in weight_name for target_module in
                    self.target_modules) and weight_name.endswith(".weight") and not \
-               any(exclusion in weight_name for exclusion in BNB_EXCLUSIONS):
+               any(exclusion in weight_name for exclusion in self.excluded_modules):
                 # Without sharding
                 if any(
                         weight_name.startswith(module)
@@ -1042,6 +1038,11 @@ class BitsAndBytesModelLoader(BaseModelLoader):
             # dimension (dim=-1)
             elif isinstance(module, (RowParallelLinear, )):
                 self.column_sharded_weights_modules.append(name)
+
+        if hasattr(model, 'bitsandbytes_excluded_modules'):
+            self.excluded_modules = model.bitsandbytes_excluded_modules
+        else:
+            self.excluded_modules = []
 
         self.model_type = type(model).__name__
 
