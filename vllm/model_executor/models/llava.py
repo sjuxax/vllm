@@ -253,6 +253,26 @@ def init_vision_tower_for_llava(
 @INPUT_REGISTRY.register_input_processor(input_processor_for_llava)
 class LlavaForConditionalGeneration(nn.Module, SupportsMultiModal, SupportsPP):
 
+    bitsandbytes_stacked_params_mapping = {
+        # shard_name, weight_name, index
+        "q_proj": ("qkv_proj", 0),
+        "k_proj": ("qkv_proj", 1),
+        "v_proj": ("qkv_proj", 2),
+        "gate_proj": ("gate_up_proj", 0),
+        "up_proj": ("gate_up_proj", 1),
+    }
+
+    default_bitsandbytes_target_modules = [
+        ".q_proj.", ".k_proj.", ".v_proj.",
+        ".up_proj.", ".o_proj.",
+        ".down_proj.", ".gate_proj.",
+        ".fc1.", ".fc2.",
+    ]
+
+    bitsandbytes_excluded_modules = [
+        'multi_modal_projector', "vision_tower", "transformer.layers"
+    ]
+
     def __init__(self,
                  config: LlavaConfig,
                  multimodal_config: MultiModalConfig,
