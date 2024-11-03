@@ -407,8 +407,10 @@ class LlavaOnevisionForConditionalGeneration(nn.Module, SupportsMultiModal,
 
 
     bitsandbytes_excluded_modules = [
-        'multi_modal_projector', "vision_tower", "encoder.layers"
+        'multi_modal_projector', "vision_tower", "encoder.layers", "vision_model"
     ]
+
+    # bitsandbytes_excluded_modules = []
 
     bitsandbytes_stacked_params_mapping = {
        # shard_name, weight_name, index
@@ -423,7 +425,6 @@ class LlavaOnevisionForConditionalGeneration(nn.Module, SupportsMultiModal,
         ".q_proj.", ".k_proj.", ".v_proj.",
         ".up_proj.", ".o_proj.",
         ".down_proj.", ".gate_proj.",
-        ".fc1.", ".fc2.",
     ]
 
 
@@ -439,7 +440,7 @@ class LlavaOnevisionForConditionalGeneration(nn.Module, SupportsMultiModal,
         # Initialize the vision tower only up to the required feature layer
         self.vision_tower = init_vision_tower_for_llava(
             config,
-            quant_config,
+            None,
             require_post_norm=False,
             prefix=maybe_prefix(prefix, "vision_tower"))
         self.multi_modal_projector = LlavaOnevisionMultiModalProjector(config)
