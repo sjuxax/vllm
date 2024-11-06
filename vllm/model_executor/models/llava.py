@@ -332,7 +332,7 @@ class LlavaForConditionalGeneration(nn.Module, SupportsMultiModal, SupportsPP):
     ]
 
     bitsandbytes_excluded_modules = [
-        'multi_modal_projector', "vision_tower", "transformer.layers"
+        # 'multi_modal_projector', "vision_tower", "transformer.layers"
     ]
 
 
