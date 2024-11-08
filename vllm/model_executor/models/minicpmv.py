@@ -373,9 +373,9 @@ class MiniCPMVBaseModel(nn.Module, SupportsMultiModal, SupportsPP):
     instantiated.
     """
 
-    bitsandbytes_excluded_modules = [
-        'vpm', "resampler"
-    ]
+    # bitsandbytes_excluded_modules = [
+    #     'vpm', "resampler"
+    # ]
 
     bitsandbytes_stacked_params_mapping = {
         # shard_name, weight_name, index
