@@ -384,14 +384,18 @@ class MiniCPMVBaseModel(nn.Module, SupportsMultiModal, SupportsPP):
         "v_proj": ("qkv_proj", 2),
         "gate_proj": ("gate_up_proj", 0),
         "up_proj": ("gate_up_proj", 1),
-
     }
 
     default_bitsandbytes_target_modules = [
-        ".q_proj.", ".k_proj.", ".v_proj.",
-        ".up_proj.", ".o_proj.",
-        ".down_proj.", ".gate_proj.",
-        ".fc1.", ".fc2.",
+        ".q_proj.",
+        ".k_proj.",
+        ".v_proj.",
+        ".up_proj.",
+        ".o_proj.",
+        ".down_proj.",
+        ".gate_proj.",
+        ".fc1.",
+        ".fc2.",
     ]
 
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):

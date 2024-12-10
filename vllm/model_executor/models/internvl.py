@@ -473,7 +473,6 @@ input_pipeline = InternVLInputPipeline(IMG_START, IMG_END, IMG_CONTEXT)
 @INPUT_REGISTRY.register_input_processor(input_pipeline.input_processor)
 class InternVLChatModel(nn.Module, SupportsMultiModal, SupportsPP):
 
-
     # BitandBytes specific attributes
     bitsandbytes_stacked_params_mapping = {
         # shard_name, weight_name, index

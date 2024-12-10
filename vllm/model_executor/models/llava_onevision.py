@@ -405,28 +405,31 @@ class LlavaOnevisionMultiModalProjector(nn.Module):
 class LlavaOnevisionForConditionalGeneration(nn.Module, SupportsMultiModal,
                                              SupportsPP):
 
-
     bitsandbytes_excluded_modules = [
-        'multi_modal_projector', "vision_tower", "encoder.layers", "vision_model"
+        'multi_modal_projector', "vision_tower", "encoder.layers",
+        "vision_model"
     ]
 
     # bitsandbytes_excluded_modules = []
 
     bitsandbytes_stacked_params_mapping = {
-       # shard_name, weight_name, index
-       "q_proj": ("qkv_proj", 0),
-       "k_proj": ("qkv_proj", 1),
-       "v_proj": ("qkv_proj", 2),
-       "gate_proj": ("gate_up_proj", 0),
-       "up_proj": ("gate_up_proj", 1),
-   }
+        # shard_name, weight_name, index
+        "q_proj": ("qkv_proj", 0),
+        "k_proj": ("qkv_proj", 1),
+        "v_proj": ("qkv_proj", 2),
+        "gate_proj": ("gate_up_proj", 0),
+        "up_proj": ("gate_up_proj", 1),
+    }
 
     default_bitsandbytes_target_modules = [
-        ".q_proj.", ".k_proj.", ".v_proj.",
-        ".up_proj.", ".o_proj.",
-        ".down_proj.", ".gate_proj.",
+        ".q_proj.",
+        ".k_proj.",
+        ".v_proj.",
+        ".up_proj.",
+        ".o_proj.",
+        ".down_proj.",
+        ".gate_proj.",
     ]
-
 
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = "") -> None:
         super().__init__()

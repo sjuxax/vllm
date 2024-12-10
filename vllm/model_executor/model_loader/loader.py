@@ -52,7 +52,6 @@ from vllm.transformers_utils.utils import is_s3
 from vllm.utils import is_pin_memory_available
 
 
-
 @contextmanager
 def device_loading_context(module: torch.nn.Module,
                            target_device: torch.device):
@@ -837,7 +836,8 @@ class BitsAndBytesModelLoader(BaseModelLoader):
         for weight_name, weight_tensor in self._hf_weight_iter(
                 hf_weights_files, use_safetensors):
 
-            if any(exclusion in weight_name for exclusion in self.excluded_modules):
+            if any(exclusion in weight_name
+                   for exclusion in self.excluded_modules):
                 yield weight_name, weight_tensor
 
             if self._is_8bit_weight_name(weight_name):
