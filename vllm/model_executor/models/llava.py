@@ -9,6 +9,7 @@ from transformers import (BatchFeature, CLIPVisionConfig, LlavaConfig,
                           PixtralVisionConfig, PretrainedConfig,
                           ProcessorMixin, SiglipVisionConfig)
 from transformers.models.llava import LlavaProcessor
+from transformers.modeling_utils import BitsAndBytesConfig
 from transformers.models.pixtral import PixtralProcessor
 
 from vllm.attention import AttentionMetadata
@@ -38,6 +39,9 @@ from .siglip import (SiglipVisionModel, dummy_image_for_siglip,
 from .utils import (AutoWeightsLoader, flatten_bn, init_vllm_registered_model,
                     maybe_prefix, merge_multimodal_embeddings)
 
+
+import rich
+console = rich.console.Console(emoji=True)
 
 class LlavaImagePixelInputs(TypedDict):
     type: Literal["pixel_values"]
@@ -273,6 +277,12 @@ def init_vision_tower_for_llava(
     # Initialize the vision tower only up to the deepest required feature layer
     num_hidden_layers = _get_num_hidden_layers(hf_config)
 
+    rich.inspect(quant_config, title="Passed quant_config")
+    if isinstance(quant_config, BitsAndBytesConfig):
+        quant_config.llm_int8_skip_modules.extend(["vision_tower", [f"vision_tower.transformers.layers.{i}" for i in range(2, 40, 2)]])
+        console.print("[bold green on white] extended quant_config ! ")
+        rich.inspect(quant_config, title="patch on init_tower_for_llava")
+
     if isinstance(vision_config, CLIPVisionConfig):
         return CLIPVisionModel(
             vision_config,
@@ -305,6 +315,7 @@ def init_vision_tower_for_llava(
 @MULTIMODAL_REGISTRY.register_max_image_tokens(get_max_llava_image_tokens)
 @MULTIMODAL_REGISTRY.register_processor(LlavaMultiModalProcessor)
 class LlavaForConditionalGeneration(nn.Module, SupportsMultiModal, SupportsPP):
+
     # BitandBytes specific attributes
     bitsandbytes_stacked_params_mapping = {
         # shard_name, weight_name, index
@@ -315,26 +326,17 @@ class LlavaForConditionalGeneration(nn.Module, SupportsMultiModal, SupportsPP):
         "up_proj": ("gate_up_proj", 1),
     }
 
-    bitsandbytes_stacked_params_mapping = {
-        # shard_name, weight_name, index
-        "q_proj": ("qkv_proj", 0),
-        "k_proj": ("qkv_proj", 1),
-        "v_proj": ("qkv_proj", 2),
-        "gate_proj": ("gate_up_proj", 0),
-        "up_proj": ("gate_up_proj", 1),
-    }
-
-    default_bitsandbytes_target_modules = [
-        ".q_proj.",
-        ".k_proj.",
-        ".v_proj.",
-        ".up_proj.",
-        ".o_proj.",
-        ".down_proj.",
-        ".gate_proj.",
-        ".fc1.",
-        ".fc2.",
-    ]
+    # default_bitsandbytes_target_modules = [
+    #     ".q_proj.",
+    #     ".k_proj.",
+    #     ".v_proj.",
+    #     ".up_proj.",
+    #     ".o_proj.",
+    #     ".down_proj.",
+    #     ".gate_proj.",
+    #     ".fc1.",
+    #     ".fc2.",
+    # ]
 
     bitsandbytes_excluded_modules = [
         # 'multi_modal_projector', "vision_tower", "transformer.layers"

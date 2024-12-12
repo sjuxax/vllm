@@ -551,6 +551,10 @@ def convert_pyslice_to_tensor(x: Any) -> torch.Tensor:
 def default_weight_loader(param: torch.Tensor,
                           loaded_weight: torch.Tensor) -> None:
     """Default weight loader."""
+    import rich
+    console = rich.console.Console(emoji=True)
+    console.print(f" :barbell: Weight {loaded_weight} with param {param} being loaded through default_weight_loader")
+    rich.pretty.pprint(locals())
     try:
         if param.numel() == 1 and loaded_weight.numel() == 1:
             # Sometimes scalar values aren't considered tensors with shapes

@@ -11,7 +11,7 @@ import os
 import warnings
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
-from typing import Any, Dict, Generator, Iterable, List, Optional, Tuple, cast
+from typing import Any, Dict, Generator, Iterable, List, Optional, Tuple, cast, Set
 
 import gguf
 import huggingface_hub
@@ -34,6 +34,7 @@ from vllm.model_executor.layers.linear import (LinearBase,
                                                ReplicatedLinear,
                                                RowParallelLinear)
 from vllm.model_executor.layers.quantization.base_config import (
+    QuantizationConfig,
     QuantizeMethodBase)
 from vllm.model_executor.model_loader.tensorizer import (
     TensorizerConfig, is_vllm_tensorized, load_with_tensorizer,
@@ -698,6 +699,10 @@ class BitsAndBytesModelLoader(BaseModelLoader):
     def __init__(self, load_config: LoadConfig):
         super().__init__(load_config)
 
+        import rich
+        # rich.inspect(self, title="a brand spanking new BitsAndBytesModelLoader")
+        # rich.inspect(load_config, title="[reverse] a glorious load_config")
+
         # Save the module names without sharding.
         self.unsharded_weights_modules: List[str] = []
         # Save the module names that are sharded by column.
@@ -705,6 +710,7 @@ class BitsAndBytesModelLoader(BaseModelLoader):
         # Store all module names (from transformers) that support
         # BNB quantization.
         self.target_modules: List[str] = []
+        self.excluded_modules: Set[str] = set()
 
     def _get_weight_files(
         self,
@@ -836,10 +842,6 @@ class BitsAndBytesModelLoader(BaseModelLoader):
         for weight_name, weight_tensor in self._hf_weight_iter(
                 hf_weights_files, use_safetensors):
 
-            if any(exclusion in weight_name
-                   for exclusion in self.excluded_modules):
-                yield weight_name, weight_tensor
-
             if self._is_8bit_weight_name(weight_name):
                 continue
 
@@ -877,6 +879,9 @@ class BitsAndBytesModelLoader(BaseModelLoader):
 
             return QuantState.from_dict(quant_state, device="cuda")
 
+        import rich
+        console = rich.console.Console(emoji=True)
+
         # Second iterate over all prequant and normal weights
         # pre quantized weights would have a quant_state
         for weight_name, weight_tensor in self._hf_weight_iter(
@@ -887,35 +892,45 @@ class BitsAndBytesModelLoader(BaseModelLoader):
             if ((f"{weight_name}.quant_state.bitsandbytes__nf4" \
                     in temp_state_dict) or \
             (f"{weight_name}.quant_state.bitsandbytes__fp4" \
-                    in temp_state_dict)) and not \
-            any(exclusion in weight_name for exclusion in self.excluded_modules):
+                    in temp_state_dict)):
+                console.print(f"4bit weight detected for {weight_name}, paring out its quant state ...")
                 quant_state = _parse_quant_state(weight_name, temp_state_dict)
                 quant_state_dict[weight_name] = quant_state
                 yield weight_name, weight_tensor
             else:
+                console.print(f"{weight_name} not currently a 4bit weight, continuing")
                 yield weight_name, weight_tensor
 
     def _unquantized_generator(self, hf_weights_files, use_safetensors,
                                quant_state_dict) -> Generator:
         from bitsandbytes.functional import quantize_4bit
+        import rich
+        from rich import traceback
+        # need to disable multiprocessing frontend for this
+        traceback.install()
+        console = rich.console.Console(emoji=True)
 
         tp_size = get_tensor_model_parallel_world_size()
         tp_rank = get_tensor_model_parallel_rank()
 
+        # rich.inspect(self, title="self: _unquantized_gnerator")
+
         for weight_name, weight_tensor in self._hf_weight_iter(
                 hf_weights_files, use_safetensors):
+            console.print(f" [bold white on dark_green] iterating on {weight_name} ")
             if any(target_module in weight_name for target_module in
-                   self.target_modules) and weight_name.endswith(".weight") and not \
-               any(exclusion in weight_name for exclusion in self.excluded_modules):
+                   self.target_modules) and weight_name.endswith(".weight"):
                 # Without sharding
                 if any(
                         weight_name.startswith(module)
                         for module in self.unsharded_weights_modules):
+                    console.print(f"[yellow] weight {weight_name} loaded unsharded.")
                     weight_sub_tensor = weight_tensor
                 # Shard by column
                 elif any(
                         weight_name.startswith(module)
                         for module in self.column_sharded_weights_modules):
+                    console.print(f"[yellow] weight {weight_name} loaded column-sharded.")
                     total_size = weight_tensor.size(-1)
                     start_index = total_size // tp_size * tp_rank
                     end_index = total_size // tp_size * (tp_rank + 1)
@@ -928,6 +943,7 @@ class BitsAndBytesModelLoader(BaseModelLoader):
                         for module in self.maybe_fused_weights_modules):
                     # special case for fused weights
                     # get the size of each shard weight tensor
+                    console.print(f"[yellow] weight {weight_name} loaded fused.")
                     total_shard_sizes = next(
                         (sizes for module, sizes in
                          self.maybe_fused_weights_modules.items()
@@ -950,6 +966,7 @@ class BitsAndBytesModelLoader(BaseModelLoader):
                     weight_sub_tensor = torch.cat(weight_tensor, dim=0)
                 # Shard by row
                 else:
+                    console.print(f"[magenta] Shard by row {weight_name}")
                     total_size = weight_tensor.size(0)
                     start_index = total_size // tp_size * tp_rank
                     end_index = total_size // tp_size * (tp_rank + 1)
@@ -968,15 +985,21 @@ class BitsAndBytesModelLoader(BaseModelLoader):
                     loaded_weight = loaded_weight.contiguous()
 
                 with set_default_torch_dtype(torch.float32):
+                    console.print(f"[gold2] oh hai, I'm here to quantize your weight {weight_name} !")
+                    # rich.inspect(loaded_weight, title=f"{weight_name} pre-quant")
+                    console.print(f"[gold3] loaded_weight ID is {id(loaded_weight)}")
                     processed_weight, quant_state = quantize_4bit(
                         loaded_weight,
                         compress_statistics=True,
                         quant_type="nf4",
                     )
+                    # rich.inspect((processed_weight, quant_state), title=f"{weight_name} post-quant")
 
                 quant_state_dict[weight_name] = quant_state
             else:
+                console.print(f"[green] {weight_name} is loading unquantized. ")
                 processed_weight = weight_tensor
+
 
             yield weight_name, processed_weight
 
@@ -993,7 +1016,19 @@ class BitsAndBytesModelLoader(BaseModelLoader):
                 inverse_stacked_mapping[packed] = []
             inverse_stacked_mapping[packed].insert(idx, orig)
 
+        import rich
+        from rich import traceback
+        from rich import pretty
+        traceback.install()
+        console = rich.console.Console(emoji=True)
+
         for name, module in model.named_modules():
+            for exclusion in self.excluded_modules:
+                if exclusion in name:
+                    console.print(f"[bold yellow on gray0] {exclusion} found in module {name}: not adding it to target modules")
+                    self.excluded_modules.add(name)
+                    continue
+
             if isinstance(module, (LinearBase, )):
                 last_name = name.split(".")[-1]
                 if sub_modules := inverse_stacked_mapping.get(last_name, []):
@@ -1003,6 +1038,7 @@ class BitsAndBytesModelLoader(BaseModelLoader):
                             name.replace(last_name, sub_name))
                 else:
                     self.target_modules.append(name)
+        assert(self.excluded_modules.isdisjoint(self.target_modules)), "Cannot have the same module in both exclusions and inclusions!"
         assert (self.target_modules
                 ), "vllm currently does not support BNB quantization for"
         f" {type(model).__name__}"
@@ -1023,7 +1059,10 @@ class BitsAndBytesModelLoader(BaseModelLoader):
         # we need their output_sizes to make shard in flight correctly with TP
         self.maybe_fused_weights_modules: Dict[str, List[int]] = {}
         self._get_bnb_target_modules(model)
+
         for name, module in model.named_modules():
+            if name not in self.target_modules:
+                continue
             # Some modules like `ReplicatedLinear` should not have their weights
             # sharded. The reason for implementing it this way is to avoid new
             # static variable in the model implementation.
@@ -1040,18 +1079,13 @@ class BitsAndBytesModelLoader(BaseModelLoader):
             elif isinstance(module, (RowParallelLinear, )):
                 self.column_sharded_weights_modules.append(name)
 
-        if hasattr(model, 'bitsandbytes_excluded_modules'):
-            self.excluded_modules = model.bitsandbytes_excluded_modules
-        else:
-            self.excluded_modules = []
 
         self.model_type = type(model).__name__
 
         logger.info("Loading weights with BitsAndBytes quantization. "
                     " May take a while ...")
 
-        quant_config = getattr(model_config.hf_config, "quantization_config",
-                               None)
+        quant_config: QuantizationConfig|None = getattr(model_config.hf_config, "quantization_config", None)
 
         pre_quant = False
         if quant_config is not None:

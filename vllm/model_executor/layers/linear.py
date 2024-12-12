@@ -1051,7 +1051,12 @@ class RowParallelLinear(LinearBase):
                 weight_shape[input_dim] = weight_shape[input_dim] // tp_size
             param.materialize(tuple(weight_shape), dtype=loaded_weight.dtype)
 
+        import rich
+        # rich.inspect(self, title="Self in weight_loader.")
         param_data = param.data
+        # rich.inspect(param_data, title="param_data inside weight_loader.")
+        # rich.inspect(param, title="param inside weight_loader.")
+        # rich.inspect(loaded_weight, title="loaded_weight inside weight_loader.")
         # bitsandbytes loads the weights of the specific portion
         # no need to narrow here
         if input_dim is not None and not use_bitsandbytes_4bit:

@@ -21,6 +21,7 @@ from vllm.inputs import (INPUT_REGISTRY, DecoderOnlyInputs, DummyData,
                          InputContext, token_inputs)
 from vllm.model_executor.layers.quantization import QuantizationConfig
 from vllm.model_executor.layers.quantization.awq import AWQConfig
+from vllm.model_executor.layers.quantization.bitsandbytes import BitsAndBytesConfig
 from vllm.model_executor.layers.sampler import SamplerOutput, get_sampler
 from vllm.model_executor.models.intern_vit import (InternVisionModel,
                                                    InternVisionPatchModel)
@@ -43,6 +44,11 @@ IMG_CONTEXT = '<IMG_CONTEXT>'
 
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
+
+
+import rich
+
+console = rich.console.Console(emoji=True,)
 
 
 class InternVLImagePixelInputs(TypedDict):
@@ -479,6 +485,9 @@ class InternVLChatModel(nn.Module, SupportsMultiModal, SupportsPP):
         "w3": ("gate_up_proj", 1),
     }
 
+    # leave every-other vision layer unquantized
+    bitsandbytes_excluded_modules = [f"vision_model.encoder.layers.{i}." for i in range(0, 40, 2)]
+
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = "") -> None:
         super().__init__()
 
@@ -486,9 +495,13 @@ class InternVLChatModel(nn.Module, SupportsMultiModal, SupportsPP):
         quant_config = vllm_config.quant_config
         multimodal_config = vllm_config.model_config.multimodal_config
 
+        import rich
         self.config = config
         self.multimodal_config = multimodal_config
-        self._patch_quant_config(config, quant_config)
+        patched_quant_config = self._patch_quant_config(config, quant_config)
+        quant_config = patched_quant_config
+        rich.inspect(self, title="InternVL Post-Quant Patch Return")
+        rich.inspect(self, title="patched_quant_config")
 
         image_size = config.force_image_size or config.vision_config.image_size
         patch_size = config.vision_config.patch_size
@@ -524,20 +537,27 @@ class InternVLChatModel(nn.Module, SupportsMultiModal, SupportsPP):
                             quant_config: QuantizationConfig):
         # the awq models from OpenGVLab missing `modules_to_not_convert`
         # patch the quant_config to add `modules_to_not_convert` back
+        import inspect
+        try:
+            console.print(inspect.getmro(quant_config))
+            console.print(inspect.getmro(config))
+        except AttributeError:
+            console.print("Couldn't get MRO")
+
+        console.print(f"[dark_orange] type of quant_config is {type(quant_config)}")
+        rich.inspect(quant_config, title="Passed-in quant config")
+        # quant_config = QuantizationConfig.from_config(config.text_config)
         if isinstance(quant_config, AWQConfig):
-            text_config = config.text_config
-            llm_quant_config = getattr(text_config, "quantization_config",
-                                       None)
-            if (not quant_config.modules_to_not_convert) and \
-                (llm_quant_config is not None):
-                quant_config.modules_to_not_convert.append("vision_model")
-        elif isinstance(quant_config, BitsAndBytesConfig):
-            text_config = config.text_config
-            llm_quant_config = getattr(text_config, "quantization_config",
-                                       None)
-            if (not quant_config.llm_int8_skip_modules) and \
-                (llm_quant_config is not None):
-                quant_config.llm_int8_skip_modules.append("vision_model")
+            quant_config.modules_to_not_convert = ['vision_model']
+        elif isinstance(quant_config, BitsAndBytesConfig) or isinstance(quant_config, vllm.config.quantization.bitsandbytes.BitsAndBytesConfig):
+            # quant_config.llm_int8_skip_modules = [f"vision_model.encoder.layers.{i}." for i in range(0, 40, 2)]
+            # console.print("[bold blue on white] have patched quant_config as follows:")
+            # rich.inspect((quant_config))
+            pass
+        # self.quantization_config = quant_config
+        rich.inspect(self, title="InternVL Post-Quant Patch")
+        return quant_config
+        # console.print(f"id(self.config.text_config.quantization_config): {id(text_config.quantization_config)}")
 
 
     @cached_property
