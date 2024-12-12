@@ -13,7 +13,7 @@ import torch
 import torch.nn as nn
 import torchvision.transforms as T
 from PIL import Image
-from transformers import PretrainedConfig
+from transformers import BitsAndBytesConfig, PretrainedConfig
 
 from vllm.attention import AttentionMetadata
 from vllm.config import VllmConfig
@@ -531,6 +531,14 @@ class InternVLChatModel(nn.Module, SupportsMultiModal, SupportsPP):
             if (not quant_config.modules_to_not_convert) and \
                 (llm_quant_config is not None):
                 quant_config.modules_to_not_convert.append("vision_model")
+        elif isinstance(quant_config, BitsAndBytesConfig):
+            text_config = config.text_config
+            llm_quant_config = getattr(text_config, "quantization_config",
+                                       None)
+            if (not quant_config.llm_int8_skip_modules) and \
+                (llm_quant_config is not None):
+                quant_config.llm_int8_skip_modules.append("vision_model")
+
 
     @cached_property
     def sampler(self):
