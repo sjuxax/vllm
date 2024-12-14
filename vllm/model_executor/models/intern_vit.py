@@ -375,8 +375,10 @@ class InternVisionEncoderLayer(nn.Module):
         return hidden_states
 
 
+from birdseye import eye
 class InternVisionEncoder(nn.Module):
 
+    @eye
     def __init__(
         self,
         config: PretrainedConfig,

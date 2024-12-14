@@ -1052,6 +1052,8 @@ class RowParallelLinear(LinearBase):
             param.materialize(tuple(weight_shape), dtype=loaded_weight.dtype)
 
         import rich
+        import rich.console
+        cns = rich.console.Console(emoji=True, record=True)
         # rich.inspect(self, title="Self in weight_loader.")
         param_data = param.data
         # rich.inspect(param_data, title="param_data inside weight_loader.")

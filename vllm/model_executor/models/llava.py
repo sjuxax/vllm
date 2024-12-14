@@ -279,7 +279,7 @@ def init_vision_tower_for_llava(
 
     rich.inspect(quant_config, title="Passed quant_config")
     if isinstance(quant_config, BitsAndBytesConfig):
-        quant_config.llm_int8_skip_modules.extend(["vision_tower", [f"vision_tower.transformers.layers.{i}" for i in range(2, 40, 2)]])
+        quant_config.excluded_modules.extend(["vision_tower", [f"vision_tower.transformers.layers.{i}" for i in range(2, 40, 2)]])
         console.print("[bold green on white] extended quant_config ! ")
         rich.inspect(quant_config, title="patch on init_tower_for_llava")
 
@@ -326,20 +326,8 @@ class LlavaForConditionalGeneration(nn.Module, SupportsMultiModal, SupportsPP):
         "up_proj": ("gate_up_proj", 1),
     }
 
-    # default_bitsandbytes_target_modules = [
-    #     ".q_proj.",
-    #     ".k_proj.",
-    #     ".v_proj.",
-    #     ".up_proj.",
-    #     ".o_proj.",
-    #     ".down_proj.",
-    #     ".gate_proj.",
-    #     ".fc1.",
-    #     ".fc2.",
-    # ]
-
     bitsandbytes_excluded_modules = [
-        # 'multi_modal_projector', "vision_tower", "transformer.layers"
+        'multi_modal_projector', "vision_tower", "transformer.layers"
     ]
 
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = "") -> None:

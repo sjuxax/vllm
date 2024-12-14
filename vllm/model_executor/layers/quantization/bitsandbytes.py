@@ -8,6 +8,10 @@ from vllm.model_executor.layers.linear import (LinearBase, LinearMethodBase,
 from vllm.model_executor.layers.quantization.base_config import (
     QuantizationConfig)
 
+import rich
+import rich.console
+
+cns = rich.console.Console(record=True, emoji=True)
 
 class BitsAndBytesConfig(QuantizationConfig):
     """Config class for BitsAndBytes Quantization.
@@ -27,6 +31,7 @@ class BitsAndBytesConfig(QuantizationConfig):
         llm_int8_has_fp16_weight: bool = False,
         llm_int8_skip_modules: Optional[List[str]] = None,
         llm_int8_threshold: float = 6.0,
+        excluded_modules: Optional[List[str]] = None
     ) -> None:
 
         self.load_in_8bit = load_in_8bit
@@ -39,6 +44,7 @@ class BitsAndBytesConfig(QuantizationConfig):
         self.llm_int8_has_fp16_weight = llm_int8_has_fp16_weight
         self.llm_int8_skip_modules = llm_int8_skip_modules or []
         self.llm_int8_threshold = llm_int8_threshold
+        self.excluded_modules = excluded_modules or []
 
         if self.bnb_4bit_quant_storage not in ["uint8"]:
             raise ValueError("Unsupported bnb_4bit_quant_storage: "
@@ -50,7 +56,8 @@ class BitsAndBytesConfig(QuantizationConfig):
                 f"bnb_4bit_compute_dtype={self.bnb_4bit_compute_dtype}, "
                 f"bnb_4bit_quant_storage={self.bnb_4bit_quant_storage}, "
                 f"bnb_4bit_quant_type={self.bnb_4bit_quant_type}, "
-                f"llm_int8_skip_modules={self.llm_int8_skip_modules})")
+                f"llm_int8_skip_modules={self.llm_int8_skip_modules}, "
+                f"excluded_modules={self.excluded_modules})")
 
     @classmethod
     def get_name(self) -> str:
@@ -104,6 +111,9 @@ class BitsAndBytesConfig(QuantizationConfig):
                                                default_value=[])
         llm_int8_threshold = get_safe_value(config, ["llm_int8_threshold"],
                                             default_value=6.0)
+        excluded_modules = get_safe_value(config,
+                                               ["excluded_modules"],
+                                               default_value=[])
 
         return cls(
             load_in_8bit=load_in_8bit,
@@ -115,7 +125,9 @@ class BitsAndBytesConfig(QuantizationConfig):
             llm_int8_enable_fp32_cpu_offload=llm_int8_enable_fp32_cpu_offload,
             llm_int8_has_fp16_weight=llm_int8_has_fp16_weight,
             llm_int8_skip_modules=llm_int8_skip_modules,
-            llm_int8_threshold=llm_int8_threshold)
+            llm_int8_threshold=llm_int8_threshold,
+            excluded_modules=excluded_modules,
+        )
 
     def get_quant_method(self, layer: torch.nn.Module,
                          prefix: str) -> Optional["LinearMethodBase"]:
@@ -128,8 +140,9 @@ class BitsAndBytesConfig(QuantizationConfig):
             except AttributeError:
                 console.print("[blue3] Failed to inspect due to an AttributeError.")
             # rich.inspect(self)
-            if is_layer_skipped_bnb(prefix, self.llm_int8_skip_modules):
-                console.print(f"[bold blue on white] layer skipping on {prefix}, :+1:")
+            all_exclusions = self.llm_int8_skip_modules + self.excluded_modules
+            if is_layer_skipped_bnb(prefix, all_exclusions):
+                console.print(f"[bright_blue on white] layer skipping on {prefix}, :+1:")
                 return UnquantizedLinearMethod()
             # else:
                 # console.print(f"[bold red on grey] layer not skipping bnb, no substring match")
@@ -137,7 +150,7 @@ class BitsAndBytesConfig(QuantizationConfig):
         return None
 
 
-def is_layer_skipped_bnb(prefix: str, llm_int8_skip_modules: List[str], match_type="substring"):
+def is_layer_skipped_bnb(prefix: str, all_exclusions: List[str], match_type="substring"):
     # Split the prefix into its dot-separated components
     components = prefix.split('.')
 
@@ -148,9 +161,9 @@ def is_layer_skipped_bnb(prefix: str, llm_int8_skip_modules: List[str], match_ty
     # rich.inspect((module_name for module_name in llm_int8_skip_modules if module_name in components), title=f"matching prefixes: {prefix}")
 
     # if match_type == "substring":
-    if not llm_int8_skip_modules:
-        console.print("[purple4 on black] :warn-emoji: no skip modules! ", emoji=True)
-    for skip_mod in llm_int8_skip_modules:
+    if not all_exclusions:
+        console.print(" :warning-emoji: no skip modules! ", emoji=True)
+    for skip_mod in all_exclusions:
         # console.print(" :skull: ", emoji=True)
         if skip_mod.lower() in prefix.lower():
             console.print(f"[gold1 on dark_red] substring match for {skip_mod.lower()} on {prefix.lower()}. 🐠 ")
@@ -209,6 +222,11 @@ class BitsAndBytesLinearMethod(LinearMethodBase):
             return qweight
 
         def create_qweight_for_4bit():
+
+            cns.print("[white on navy_blue] I'm applying 4 bits right now!")
+            cns.print(rich.pretty.Pretty(locals()))
+            cns.print(" :skull: :skull: :skull: ")
+
             quant_ratio = calculate_quant_ratio(params_dtype)
 
             total_size = input_size_per_partition * sum(output_partition_sizes)
@@ -236,6 +254,11 @@ class BitsAndBytesLinearMethod(LinearMethodBase):
             qweight = create_qweight_for_4bit()
         # Enable parameters to have the same name as in the BNB
         # checkpoint format.
+
+        cns.print(rich.inspect(layer, title="[red on white] layer registering qweight"))
+        cns.print(rich.pretty.Pretty(locals()))
+        cns.print(" :skull: :skull: :skull: ")
+
         layer.register_parameter("weight", qweight)
         set_weight_attrs(qweight, extra_weight_attrs)
 

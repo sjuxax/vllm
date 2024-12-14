@@ -13,7 +13,7 @@ import torch
 import torch.nn as nn
 import torchvision.transforms as T
 from PIL import Image
-from transformers import BitsAndBytesConfig, PretrainedConfig
+from transformers import PretrainedConfig
 
 from vllm.attention import AttentionMetadata
 from vllm.config import VllmConfig
@@ -67,7 +67,7 @@ class InternVLImagePixelInputs(TypedDict):
 class InternVLImageEmbeddingInputs(TypedDict):
     type: Literal["image_embeds"]
     data: NestedTensors
-    """ 
+    """
     A tensor of shape `(num_images, total_image_feature_size, hidden_size)`
     or a list of tensors of shape `(total_image_feature_size, hidden_size)`
 
@@ -483,10 +483,11 @@ class InternVLChatModel(nn.Module, SupportsMultiModal, SupportsPP):
         # shard_name, weight_name, index
         "w1": ("gate_up_proj", 0),
         "w3": ("gate_up_proj", 1),
+        "w2": ("w2", 0)
     }
 
     # leave every-other vision layer unquantized
-    bitsandbytes_excluded_modules = [f"vision_model.encoder.layers.{i}." for i in range(0, 40, 2)]
+    bitsandbytes_excluded_modules = [f"vision_model.encoder.layers.{i}." for i in range(0, 40, 4)]
 
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = "") -> None:
         super().__init__()
@@ -549,12 +550,11 @@ class InternVLChatModel(nn.Module, SupportsMultiModal, SupportsPP):
         # quant_config = QuantizationConfig.from_config(config.text_config)
         if isinstance(quant_config, AWQConfig):
             quant_config.modules_to_not_convert = ['vision_model']
-        elif isinstance(quant_config, BitsAndBytesConfig) or isinstance(quant_config, vllm.config.quantization.bitsandbytes.BitsAndBytesConfig):
-            # quant_config.llm_int8_skip_modules = [f"vision_model.encoder.layers.{i}." for i in range(0, 40, 2)]
-            # console.print("[bold blue on white] have patched quant_config as follows:")
-            # rich.inspect((quant_config))
-            pass
-        # self.quantization_config = quant_config
+        elif isinstance(quant_config, BitsAndBytesConfig):
+            quant_config.excluded_modules = self.bitsandbytes_excluded_modules
+            console.print("[bold blue on white] have patched quant_config as follows:")
+            rich.inspect((quant_config))
+        self.quantization_config = quant_config
         rich.inspect(self, title="InternVL Post-Quant Patch")
         return quant_config
         # console.print(f"id(self.config.text_config.quantization_config): {id(text_config.quantization_config)}")
@@ -582,6 +582,13 @@ class InternVLChatModel(nn.Module, SupportsMultiModal, SupportsPP):
                     + vision_feature_layer + 1
             else:
                 num_hidden_layers = vision_feature_layer + 1
+
+            import rich
+            import rich.console
+            cns = rich.console.Console(record=True, emoji=True)
+            cns.print("[bright_blue on white] Hey man, here's ur quant_config in InternVision or something")
+            cns.print(rich.pretty.Pretty(quant_config))
+            cns.print("[bold white on red] did it :joy: ")
 
             return InternVisionModel(
                 config.vision_config,

@@ -552,9 +552,9 @@ def default_weight_loader(param: torch.Tensor,
                           loaded_weight: torch.Tensor) -> None:
     """Default weight loader."""
     import rich
-    console = rich.console.Console(emoji=True)
-    console.print(f" :barbell: Weight {loaded_weight} with param {param} being loaded through default_weight_loader")
-    rich.pretty.pprint(locals())
+    console = rich.console.Console(emoji=True, record=True)
+    console.print(f" :weight_lifter: Weight being loaded through default_weight_loader")
+    console.print(rich.pretty.Pretty(locals()))
     try:
         if param.numel() == 1 and loaded_weight.numel() == 1:
             # Sometimes scalar values aren't considered tensors with shapes
@@ -573,6 +573,11 @@ def default_weight_loader(param: torch.Tensor,
         raise
 
 
+from birdseye import eye
+from snoop import snoop
+
+@snoop
+@eye
 def row_parallel_weight_loader(param: torch.Tensor,
                                loaded_weight: torch.Tensor) -> None:
     """Load weights that are row-parallelized."""
@@ -590,6 +595,7 @@ def row_parallel_weight_loader(param: torch.Tensor,
 LoaderFunction = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
 
 
+@eye
 def sharded_weight_loader(shard_axis: int) -> LoaderFunction:
     """Create a weight loader that shards the weights along the given axis"""
 

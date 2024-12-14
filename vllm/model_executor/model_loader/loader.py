@@ -22,8 +22,8 @@ from torch import nn
 from transformers import AutoModelForCausalLM
 from transformers.utils import SAFE_WEIGHTS_INDEX_NAME
 
-from vllm.config import (LoadConfig, LoadFormat, ModelConfig, ParallelConfig,
-                         VllmConfig, set_current_vllm_config)
+from vllm.config import (LoadConfig, LoadFormat, ModelConfig,
+                         ParallelConfig, VllmConfig, set_current_vllm_config)
 from vllm.distributed import (get_tensor_model_parallel_rank,
                               get_tensor_model_parallel_world_size)
 from vllm.envs import VLLM_USE_MODELSCOPE
@@ -33,6 +33,9 @@ from vllm.model_executor.layers.linear import (LinearBase,
                                                QKVParallelLinear,
                                                ReplicatedLinear,
                                                RowParallelLinear)
+from vllm.model_executor.layers.quantization.bitsandbytes import (
+    BitsAndBytesConfig
+)
 from vllm.model_executor.layers.quantization.base_config import (
     QuantizationConfig,
     QuantizeMethodBase)
@@ -51,6 +54,9 @@ from vllm.model_executor.utils import set_weight_attrs
 from vllm.platforms import current_platform
 from vllm.transformers_utils.utils import is_s3
 from vllm.utils import is_pin_memory_available
+
+from rich import traceback
+traceback.install(show_locals=True)
 
 
 @contextmanager
@@ -384,6 +390,8 @@ class DefaultModelLoader(BaseModelLoader):
                     # parameters onto device for processing and back off after.
                     with device_loading_context(module, target_device):
                         quant_method.process_weights_after_loading(module)
+
+
         return model.eval()
 
 
@@ -596,6 +604,11 @@ class ShardedStateLoader(BaseModelLoader):
     def download_model(self, model_config: ModelConfig) -> None:
         self._prepare_weights(model_config.model, model_config.revision)
 
+    from birdseye import eye
+    from snoop import snoop
+
+    @snoop
+    @eye
     def load_model(self, vllm_config: VllmConfig) -> nn.Module:
         device_config = vllm_config.device_config
         model_config = vllm_config.model_config
@@ -711,6 +724,7 @@ class BitsAndBytesModelLoader(BaseModelLoader):
         # BNB quantization.
         self.target_modules: List[str] = []
         self.excluded_modules: Set[str] = set()
+        self.weight_layout: Dict[str, List[str]] = {"sharded_by_row": [], "fused": [], "unsharded": [], "sharded_by_column": [], "unquantized": []}
 
     def _get_weight_files(
         self,
@@ -907,13 +921,13 @@ class BitsAndBytesModelLoader(BaseModelLoader):
         import rich
         from rich import traceback
         # need to disable multiprocessing frontend for this
-        traceback.install()
+        traceback.install(show_locals=True)
         console = rich.console.Console(emoji=True)
 
         tp_size = get_tensor_model_parallel_world_size()
         tp_rank = get_tensor_model_parallel_rank()
 
-        # rich.inspect(self, title="self: _unquantized_gnerator")
+        rich.inspect(self, title="self: _unquantized_generator")
 
         for weight_name, weight_tensor in self._hf_weight_iter(
                 hf_weights_files, use_safetensors):
@@ -924,18 +938,20 @@ class BitsAndBytesModelLoader(BaseModelLoader):
                 if any(
                         weight_name.startswith(module)
                         for module in self.unsharded_weights_modules):
-                    console.print(f"[yellow] weight {weight_name} loaded unsharded.")
+                    console.print(f"[green3] weight {weight_name} loaded unsharded.")
                     weight_sub_tensor = weight_tensor
+                    self.weight_layout['unsharded'].append(weight_name)
                 # Shard by column
                 elif any(
                         weight_name.startswith(module)
                         for module in self.column_sharded_weights_modules):
-                    console.print(f"[yellow] weight {weight_name} loaded column-sharded.")
+                    console.print(f"[magenta] weight {weight_name} loaded column-sharded.")
                     total_size = weight_tensor.size(-1)
                     start_index = total_size // tp_size * tp_rank
                     end_index = total_size // tp_size * (tp_rank + 1)
                     weight_sub_tensor = weight_tensor[...,
                                                       start_index:end_index]
+                    self.weight_layout['sharded_by_column'].append(weight_name)
                 # Weights have fused on disk. In this case, we assume that the
                 # weight and module use same name.
                 elif any(
@@ -943,7 +959,7 @@ class BitsAndBytesModelLoader(BaseModelLoader):
                         for module in self.maybe_fused_weights_modules):
                     # special case for fused weights
                     # get the size of each shard weight tensor
-                    console.print(f"[yellow] weight {weight_name} loaded fused.")
+                    console.print(f"[red] weight {weight_name} loaded fused.")
                     total_shard_sizes = next(
                         (sizes for module, sizes in
                          self.maybe_fused_weights_modules.items()
@@ -964,6 +980,7 @@ class BitsAndBytesModelLoader(BaseModelLoader):
                         for start_index, end_index in shard_weights_index
                     ]
                     weight_sub_tensor = torch.cat(weight_tensor, dim=0)
+                    self.weight_layout['fused'].append(weight_name)
                 # Shard by row
                 else:
                     console.print(f"[magenta] Shard by row {weight_name}")
@@ -972,6 +989,7 @@ class BitsAndBytesModelLoader(BaseModelLoader):
                     end_index = total_size // tp_size * (tp_rank + 1)
                     weight_sub_tensor = weight_tensor[start_index:end_index,
                                                       ...]
+                    self.weight_layout['sharded_by_row'].append(weight_name)
 
                 # bitsandbytes requires data in GPU
                 if weight_sub_tensor.is_cuda:
@@ -985,25 +1003,26 @@ class BitsAndBytesModelLoader(BaseModelLoader):
                     loaded_weight = loaded_weight.contiguous()
 
                 with set_default_torch_dtype(torch.float32):
-                    console.print(f"[gold2] oh hai, I'm here to quantize your weight {weight_name} !")
-                    # rich.inspect(loaded_weight, title=f"{weight_name} pre-quant")
-                    console.print(f"[gold3] loaded_weight ID is {id(loaded_weight)}")
                     processed_weight, quant_state = quantize_4bit(
                         loaded_weight,
                         compress_statistics=True,
                         quant_type="nf4",
                     )
-                    # rich.inspect((processed_weight, quant_state), title=f"{weight_name} post-quant")
 
                 quant_state_dict[weight_name] = quant_state
             else:
+                self.weight_layout['unquantized'].append(weight_name)
                 console.print(f"[green] {weight_name} is loading unquantized. ")
                 processed_weight = weight_tensor
 
 
             yield weight_name, processed_weight
 
-    def _get_bnb_target_modules(self, model: nn.Module) -> None:
+    def _get_bnb_target_modules(self, model: nn.Module, model_config: ModelConfig) -> None:
+
+        import rich
+        from rich import pretty
+        console = rich.console.Console(emoji=True, record=True)
 
         # TODO: Maybe we can replace bitsandbytes_stacked_params_mapping with
         # packed_modules_mapping.
@@ -1016,21 +1035,34 @@ class BitsAndBytesModelLoader(BaseModelLoader):
                 inverse_stacked_mapping[packed] = []
             inverse_stacked_mapping[packed].insert(idx, orig)
 
-        import rich
-        from rich import traceback
-        from rich import pretty
-        traceback.install()
-        console = rich.console.Console(emoji=True)
+        console.print(f"inverse_stacked_mapping: {pretty.Pretty(inverse_stacked_mapping)}")
+
+        quant_config: QuantizationConfig|None = getattr(model_config, "quantization_config", None)
+
+        if quant_config is None:
+            quant_config = BitsAndBytesConfig(excluded_modules=model.bitsandbytes_excluded_modules)
+
+        rich.inspect(quant_config, title="[reverse] Ur New QUANT_CONFIG!")
+        console.print(rich.pretty.Pretty(quant_config))
 
         for name, module in model.named_modules():
-            for exclusion in self.excluded_modules:
+            for exclusion in model.bitsandbytes_excluded_modules:
                 if exclusion in name:
-                    console.print(f"[bold yellow on gray0] {exclusion} found in module {name}: not adding it to target modules")
+                    console.print(f"[yellow on grey0] {exclusion} found in module {name}: not adding it to target modules")
                     self.excluded_modules.add(name)
-                    continue
+                    console.print(f"is in target_modules at this time? {name in self.target_modules}")
+                    try:
+                        self.target_modules.remove(name)
+                    except Exception:
+                        console.print(f"{name} wasn't there to remove.")
+                    # console.print(f"not anymore, just removed it. :joy: ")
 
+            if name in self.excluded_modules:
+                continue
             if isinstance(module, (LinearBase, )):
+                console.print(f"currently {name} in LinearBase ")
                 last_name = name.split(".")[-1]
+                console.print(f"last_name is {last_name}")
                 if sub_modules := inverse_stacked_mapping.get(last_name, []):
                     # Map vllm's names to transformers' names.
                     for sub_name in sub_modules:
@@ -1038,6 +1070,13 @@ class BitsAndBytesModelLoader(BaseModelLoader):
                             name.replace(last_name, sub_name))
                 else:
                     self.target_modules.append(name)
+
+        rich.inspect(self.maybe_fused_weights_modules, title="[reverse] Maybe Fused")
+        rich.inspect(self.column_sharded_weights_modules, title="[reverse] Column Sharded")
+        rich.inspect(self.unsharded_weights_modules, title="[reverse] Unsharded")
+        rich.inspect(self.target_modules, title="[reverse] Target Modules")
+        rich.inspect(self.excluded_modules, title="[reverse] Excluded Modules")
+
         assert(self.excluded_modules.isdisjoint(self.target_modules)), "Cannot have the same module in both exclusions and inclusions!"
         assert (self.target_modules
                 ), "vllm currently does not support BNB quantization for"
@@ -1058,7 +1097,7 @@ class BitsAndBytesModelLoader(BaseModelLoader):
         # Modules whose weights might have fused on disk
         # we need their output_sizes to make shard in flight correctly with TP
         self.maybe_fused_weights_modules: Dict[str, List[int]] = {}
-        self._get_bnb_target_modules(model)
+        self._get_bnb_target_modules(model, model_config)
 
         for name, module in model.named_modules():
             if name not in self.target_modules:
