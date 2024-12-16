@@ -9,7 +9,6 @@ from transformers import (BatchFeature, CLIPVisionConfig, LlavaConfig,
                           PixtralVisionConfig, PretrainedConfig,
                           ProcessorMixin, SiglipVisionConfig)
 from transformers.models.llava import LlavaProcessor
-from transformers.modeling_utils import BitsAndBytesConfig
 from transformers.models.pixtral import PixtralProcessor
 
 from vllm.attention import AttentionMetadata
@@ -19,6 +18,7 @@ from vllm.model_executor.layers.activation import get_act_fn
 from vllm.model_executor.layers.linear import (ColumnParallelLinear,
                                                RowParallelLinear)
 from vllm.model_executor.layers.quantization import QuantizationConfig
+from vllm.model_executor.layers.quantization.bitsandbytes import BitsAndBytesConfig
 from vllm.model_executor.layers.sampler import SamplerOutput, get_sampler
 from vllm.model_executor.sampling_metadata import SamplingMetadata
 from vllm.multimodal import MULTIMODAL_REGISTRY
@@ -41,7 +41,7 @@ from .utils import (AutoWeightsLoader, flatten_bn, init_vllm_registered_model,
 
 
 import rich
-console = rich.console.Console(emoji=True)
+console = rich.console.Console(record=True, emoji=True, no_color=False)
 
 class LlavaImagePixelInputs(TypedDict):
     type: Literal["pixel_values"]
@@ -76,6 +76,8 @@ class LlavaMultiModalProjector(nn.Module):
                  prefix: str = ""):
         super().__init__()
 
+        import rich
+        rich.inspect(quant_config, title="Quant Config pased into LlavaMultiModalProjector")
         self.linear_1 = ColumnParallelLinear(vision_hidden_size,
                                              text_hidden_size,
                                              bias=True,
@@ -277,12 +279,6 @@ def init_vision_tower_for_llava(
     # Initialize the vision tower only up to the deepest required feature layer
     num_hidden_layers = _get_num_hidden_layers(hf_config)
 
-    rich.inspect(quant_config, title="Passed quant_config")
-    if isinstance(quant_config, BitsAndBytesConfig):
-        quant_config.excluded_modules.extend(["vision_tower", [f"vision_tower.transformers.layers.{i}" for i in range(2, 40, 2)]])
-        console.print("[bold green on white] extended quant_config ! ")
-        rich.inspect(quant_config, title="patch on init_tower_for_llava")
-
     if isinstance(vision_config, CLIPVisionConfig):
         return CLIPVisionModel(
             vision_config,
@@ -326,9 +322,9 @@ class LlavaForConditionalGeneration(nn.Module, SupportsMultiModal, SupportsPP):
         "up_proj": ("gate_up_proj", 1),
     }
 
-    bitsandbytes_excluded_modules = [
-        'multi_modal_projector', "vision_tower", "transformer.layers"
-    ]
+    bitsandbytes_excluded_modules = set([
+         f"vision_tower.transformer.layers.{i}" for i in range(2, 40, 2)
+    ])
 
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = "") -> None:
         super().__init__()
@@ -336,6 +332,9 @@ class LlavaForConditionalGeneration(nn.Module, SupportsMultiModal, SupportsPP):
         config = vllm_config.model_config.hf_config
         quant_config = vllm_config.quant_config
         multimodal_config = vllm_config.model_config.multimodal_config
+
+        if isinstance(quant_config, BitsAndBytesConfig):
+            quant_config.excluded_modules = self.bitsandbytes_excluded_modules
 
         self.config = config
         self.multimodal_config = multimodal_config

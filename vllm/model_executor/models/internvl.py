@@ -48,7 +48,7 @@ IMAGENET_STD = (0.229, 0.224, 0.225)
 
 import rich
 
-console = rich.console.Console(emoji=True,)
+console = rich.console.Console(record=True, emoji=True, no_color=False)
 
 
 class InternVLImagePixelInputs(TypedDict):
@@ -481,13 +481,12 @@ class InternVLChatModel(nn.Module, SupportsMultiModal, SupportsPP):
 
     bitsandbytes_stacked_params_mapping = {
         # shard_name, weight_name, index
-        "w1": ("gate_up_proj", 0),
-        "w3": ("gate_up_proj", 1),
-        "w2": ("w2", 0)
+        "w1": ("gate_up_proj", 1),
+        "w3": ("gate_up_proj", 0),
     }
 
     # leave every-other vision layer unquantized
-    bitsandbytes_excluded_modules = [f"vision_model.encoder.layers.{i}." for i in range(0, 40, 4)]
+    bitsandbytes_excluded_modules: Set[str] = set([f"vision_model.encoder.layers.{i}." for i in range(0, 40, 4)])
 
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = "") -> None:
         super().__init__()
@@ -585,7 +584,7 @@ class InternVLChatModel(nn.Module, SupportsMultiModal, SupportsPP):
 
             import rich
             import rich.console
-            cns = rich.console.Console(record=True, emoji=True)
+            cns = rich.console.Console(record=True, emoji=True, no_color=False)
             cns.print("[bright_blue on white] Hey man, here's ur quant_config in InternVision or something")
             cns.print(rich.pretty.Pretty(quant_config))
             cns.print("[bold white on red] did it :joy: ")

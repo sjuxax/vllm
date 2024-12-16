@@ -16,7 +16,7 @@ def get_model(*, vllm_config: VllmConfig) -> nn.Module:
     import rich.terminal_theme
     import rich.color
     p = rich.pretty.Pretty(loader.weight_layout)
-    consolex = rich.console.Console(emoji=True, record=True)
+    consolex = rich.console.Console(record=True, emoji=True, no_color=False)
     if isinstance(loader, BitsAndBytesModelLoader):
         consolex.print("[pink1 on grey0] START WEIGHT LAYOUT")
         consolex.print(p)

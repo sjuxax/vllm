@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 import torch
 
@@ -11,7 +11,7 @@ from vllm.model_executor.layers.quantization.base_config import (
 import rich
 import rich.console
 
-cns = rich.console.Console(record=True, emoji=True)
+cns = rich.console.Console(record=True, emoji=True, no_color=False)
 
 class BitsAndBytesConfig(QuantizationConfig):
     """Config class for BitsAndBytes Quantization.
@@ -31,7 +31,7 @@ class BitsAndBytesConfig(QuantizationConfig):
         llm_int8_has_fp16_weight: bool = False,
         llm_int8_skip_modules: Optional[List[str]] = None,
         llm_int8_threshold: float = 6.0,
-        excluded_modules: Optional[List[str]] = None
+        excluded_modules: Set[str] = set()
     ) -> None:
 
         self.load_in_8bit = load_in_8bit
@@ -133,38 +133,38 @@ class BitsAndBytesConfig(QuantizationConfig):
                          prefix: str) -> Optional["LinearMethodBase"]:
         if isinstance(layer, LinearBase):
             import rich
-            console = rich.console.Console()
+            console = rich.console.Console(record=True, emoji=True, no_color=False)
             console.print("[bold navy_blue on white] in get_quant_method for this layer.")
             try:
                 rich.inspect(layer)
             except AttributeError:
                 console.print("[blue3] Failed to inspect due to an AttributeError.")
             # rich.inspect(self)
-            all_exclusions = self.llm_int8_skip_modules + self.excluded_modules
+            self.excluded_modules.update(self.llm_int8_skip_modules)
+            all_exclusions = self.excluded_modules
             if is_layer_skipped_bnb(prefix, all_exclusions):
                 console.print(f"[bright_blue on white] layer skipping on {prefix}, :+1:")
                 return UnquantizedLinearMethod()
-            # else:
-                # console.print(f"[bold red on grey] layer not skipping bnb, no substring match")
-            return BitsAndBytesLinearMethod(self)
+            else:
+                console.print(f"[bold red on grey] layer not skipping bnb, {prefix} doesn't match substring")
+                return BitsAndBytesLinearMethod(self)
         return None
 
 
-def is_layer_skipped_bnb(prefix: str, all_exclusions: List[str], match_type="substring"):
+def is_layer_skipped_bnb(prefix: str, all_exclusions: Set[str], match_type="substring"):
     # Split the prefix into its dot-separated components
     components = prefix.split('.')
 
     import rich
-    console = rich.console.Console(emoji=True)
-    # console.print(f"[pink1 on navy_blue] hey sup. we're going to check the layer skpping now for whether prefix {prefix} is matche 🎳 ")
+    console = rich.console.Console(record=True, emoji=True, no_color=False)
     # # Check if any of the skip modules exactly matches any component
     # rich.inspect((module_name for module_name in llm_int8_skip_modules if module_name in components), title=f"matching prefixes: {prefix}")
 
     # if match_type == "substring":
     if not all_exclusions:
         console.print(" :warning-emoji: no skip modules! ", emoji=True)
+        assert len(all_exclusions) > 0, "No skip modules! Fix initialization of the skip modules object."
     for skip_mod in all_exclusions:
-        # console.print(" :skull: ", emoji=True)
         if skip_mod.lower() in prefix.lower():
             console.print(f"[gold1 on dark_red] substring match for {skip_mod.lower()} on {prefix.lower()}. 🐠 ")
             return True
@@ -224,7 +224,6 @@ class BitsAndBytesLinearMethod(LinearMethodBase):
         def create_qweight_for_4bit():
 
             cns.print("[white on navy_blue] I'm applying 4 bits right now!")
-            cns.print(rich.pretty.Pretty(locals()))
             cns.print(" :skull: :skull: :skull: ")
 
             quant_ratio = calculate_quant_ratio(params_dtype)
@@ -255,7 +254,7 @@ class BitsAndBytesLinearMethod(LinearMethodBase):
         # Enable parameters to have the same name as in the BNB
         # checkpoint format.
 
-        cns.print(rich.inspect(layer, title="[red on white] layer registering qweight"))
+        cns.print(rich.inspect(self.quant_config, title="[red on white] quant_config while registering 4bit qweight"))
         cns.print(rich.pretty.Pretty(locals()))
         cns.print(" :skull: :skull: :skull: ")
 

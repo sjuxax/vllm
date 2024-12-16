@@ -894,7 +894,7 @@ class BitsAndBytesModelLoader(BaseModelLoader):
             return QuantState.from_dict(quant_state, device="cuda")
 
         import rich
-        console = rich.console.Console(emoji=True)
+        console = rich.console.Console(record=True, emoji=True, no_color=False)
 
         # Second iterate over all prequant and normal weights
         # pre quantized weights would have a quant_state
@@ -922,7 +922,7 @@ class BitsAndBytesModelLoader(BaseModelLoader):
         from rich import traceback
         # need to disable multiprocessing frontend for this
         traceback.install(show_locals=True)
-        console = rich.console.Console(emoji=True)
+        console = rich.console.Console(record=True, emoji=True, no_color=False)
 
         tp_size = get_tensor_model_parallel_world_size()
         tp_rank = get_tensor_model_parallel_rank()
@@ -1022,7 +1022,7 @@ class BitsAndBytesModelLoader(BaseModelLoader):
 
         import rich
         from rich import pretty
-        console = rich.console.Console(emoji=True, record=True)
+        console = rich.console.Console(record=True, emoji=True, no_color=False)
 
         # TODO: Maybe we can replace bitsandbytes_stacked_params_mapping with
         # packed_modules_mapping.
@@ -1037,27 +1037,30 @@ class BitsAndBytesModelLoader(BaseModelLoader):
 
         console.print(f"inverse_stacked_mapping: {pretty.Pretty(inverse_stacked_mapping)}")
 
-        quant_config: QuantizationConfig|None = getattr(model_config, "quantization_config", None)
+        quant_config: QuantizationConfig|None = getattr(model, "quantization_config", None)
 
-        if quant_config is None:
-            quant_config = BitsAndBytesConfig(excluded_modules=model.bitsandbytes_excluded_modules)
-
-        rich.inspect(quant_config, title="[reverse] Ur New QUANT_CONFIG!")
-        console.print(rich.pretty.Pretty(quant_config))
+        console.print(rich.inspect(quant_config))
+        console.print(rich.inspect(model, title="[bold white on magenta] model obj in get_bnb_target_modules"))
+        self.excluded_modules = getattr(model, "bitsandbytes_excluded_modules", set())
+        if isinstance(self.excluded_modules, list):
+            self.excluded_modules = set(self.excluded_modules)
+        console.print(f"[bold white on red] excluded modules at this juncture: {self.excluded_modules}")
+        assert len(self.excluded_modules) > 0, "Excluded modules 0."
 
         for name, module in model.named_modules():
-            for exclusion in model.bitsandbytes_excluded_modules:
+            exclude = False
+            for exclusion in self.excluded_modules:
                 if exclusion in name:
                     console.print(f"[yellow on grey0] {exclusion} found in module {name}: not adding it to target modules")
-                    self.excluded_modules.add(name)
                     console.print(f"is in target_modules at this time? {name in self.target_modules}")
                     try:
                         self.target_modules.remove(name)
                     except Exception:
                         console.print(f"{name} wasn't there to remove.")
+                    exclude = True
                     # console.print(f"not anymore, just removed it. :joy: ")
 
-            if name in self.excluded_modules:
+            if name in self.excluded_modules or exclude:
                 continue
             if isinstance(module, (LinearBase, )):
                 console.print(f"currently {name} in LinearBase ")
@@ -1100,7 +1103,7 @@ class BitsAndBytesModelLoader(BaseModelLoader):
         self._get_bnb_target_modules(model, model_config)
 
         for name, module in model.named_modules():
-            if name not in self.target_modules:
+            if name not in self.target_modules and name not in self.excluded_modules:
                 continue
             # Some modules like `ReplicatedLinear` should not have their weights
             # sharded. The reason for implementing it this way is to avoid new

@@ -1053,7 +1053,7 @@ class RowParallelLinear(LinearBase):
 
         import rich
         import rich.console
-        cns = rich.console.Console(emoji=True, record=True)
+        cns = rich.console.Console(record=True, emoji=True, no_color=False)
         # rich.inspect(self, title="Self in weight_loader.")
         param_data = param.data
         # rich.inspect(param_data, title="param_data inside weight_loader.")
