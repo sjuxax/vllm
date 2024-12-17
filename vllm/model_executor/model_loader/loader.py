@@ -56,7 +56,11 @@ from vllm.transformers_utils.utils import is_s3
 from vllm.utils import is_pin_memory_available
 
 from rich import traceback
-traceback.install(show_locals=True)
+traceback.install(show_locals=True, width=150, code_width=136)
+
+import rich
+import rich.console
+console: rich.console.Console = rich.console.Console(record=True, emoji=True, no_color=False)
 
 
 @contextmanager
@@ -725,6 +729,7 @@ class BitsAndBytesModelLoader(BaseModelLoader):
         self.target_modules: List[str] = []
         self.excluded_modules: Set[str] = set()
         self.weight_layout: Dict[str, List[str]] = {"sharded_by_row": [], "fused": [], "unsharded": [], "sharded_by_column": [], "unquantized": []}
+        self.stacked_params_mapping: Dict[str, Tuple[str, int]] = {}
 
     def _get_weight_files(
         self,
@@ -893,21 +898,19 @@ class BitsAndBytesModelLoader(BaseModelLoader):
 
             return QuantState.from_dict(quant_state, device="cuda")
 
-        import rich
-        console = rich.console.Console(record=True, emoji=True, no_color=False)
-
         # Second iterate over all prequant and normal weights
         # pre quantized weights would have a quant_state
         for weight_name, weight_tensor in self._hf_weight_iter(
                 hf_weights_files, use_safetensors):
             if self._is_4bit_weight_name(weight_name):
+                console.print(f"weight_name 4bit detected, continuing ...")
                 continue
 
             if ((f"{weight_name}.quant_state.bitsandbytes__nf4" \
                     in temp_state_dict) or \
             (f"{weight_name}.quant_state.bitsandbytes__fp4" \
                     in temp_state_dict)):
-                console.print(f"4bit weight detected for {weight_name}, paring out its quant state ...")
+                console.print(f"4bit weight detected for {weight_name}, parsing out its quant state ...")
                 quant_state = _parse_quant_state(weight_name, temp_state_dict)
                 quant_state_dict[weight_name] = quant_state
                 yield weight_name, weight_tensor
@@ -918,11 +921,6 @@ class BitsAndBytesModelLoader(BaseModelLoader):
     def _unquantized_generator(self, hf_weights_files, use_safetensors,
                                quant_state_dict) -> Generator:
         from bitsandbytes.functional import quantize_4bit
-        import rich
-        from rich import traceback
-        # need to disable multiprocessing frontend for this
-        traceback.install(show_locals=True)
-        console = rich.console.Console(record=True, emoji=True, no_color=False)
 
         tp_size = get_tensor_model_parallel_world_size()
         tp_rank = get_tensor_model_parallel_rank()
@@ -1002,6 +1000,7 @@ class BitsAndBytesModelLoader(BaseModelLoader):
                 if loaded_weight.is_contiguous() is False:
                     loaded_weight = loaded_weight.contiguous()
 
+                console.print(f"[bold white on magenta] about to quantize weight_name {weight_name} ...")
                 with set_default_torch_dtype(torch.float32):
                     processed_weight, quant_state = quantize_4bit(
                         loaded_weight,
@@ -1018,36 +1017,64 @@ class BitsAndBytesModelLoader(BaseModelLoader):
 
             yield weight_name, processed_weight
 
-    def _get_bnb_target_modules(self, model: nn.Module, model_config: ModelConfig) -> None:
+    def _get_bnb_target_modules(self, model: nn.Module, stacked_mapping: dict[str, Tuple[str,int]], prefix: str|None = None) -> Set[str]:
 
         import rich
         from rich import pretty
-        console = rich.console.Console(record=True, emoji=True, no_color=False)
 
-        # TODO: Maybe we can replace bitsandbytes_stacked_params_mapping with
-        # packed_modules_mapping.
-        inverse_stacked_mapping: Dict[str, List[str]] = {}
-        for orig, (
-                packed,
-                idx,
-        ) in model.bitsandbytes_stacked_params_mapping.items():
-            if packed not in inverse_stacked_mapping:
-                inverse_stacked_mapping[packed] = []
-            inverse_stacked_mapping[packed].insert(idx, orig)
+        console.print(f"[bold black on yellow] getting target modules for model {type(model).__name__}")
+        console.print(rich.inspect(model, title=f"[bold black on yellow] inspection of model {model}"))
 
-        console.print(f"inverse_stacked_mapping: {pretty.Pretty(inverse_stacked_mapping)}")
+        console.print(f"merging self.stacked_params_mapping {self.stacked_params_mapping} with stacked_mapping {stacked_mapping}")
+        self.stacked_params_mapping = self.stacked_params_mapping | stacked_mapping
 
         quant_config: QuantizationConfig|None = getattr(model, "quantization_config", None)
 
         console.print(rich.inspect(quant_config))
         console.print(rich.inspect(model, title="[bold white on magenta] model obj in get_bnb_target_modules"))
-        self.excluded_modules = getattr(model, "bitsandbytes_excluded_modules", set())
-        if isinstance(self.excluded_modules, list):
-            self.excluded_modules = set(self.excluded_modules)
+
+        self.excluded_modules.update(getattr(model, "bitsandbytes_excluded_modules", []))
+
         console.print(f"[bold white on red] excluded modules at this juncture: {self.excluded_modules}")
-        assert len(self.excluded_modules) > 0, "Excluded modules 0."
+
+        subtarget: set[str] = set()
+        for name, module in model.named_modules():
+            # import pdb; pdb.set_trace(header="cycling through named_modules")
+
+            if name == "language_model":
+                console.print(f"[bold white on navy_blue] module {name} isinstance Model, recursing into get_bnb_target_modules ...")
+                subtarget = self._get_bnb_target_modules(module, (self.stacked_params_mapping | getattr(module, "bitsandbytes_stacked_params_mapping", {})), prefix=name)
+                console.print(f"[bold white on navy_blue] subtarget response: {subtarget}")
+
+            if prefix:
+                name = f"{prefix}.{name}"
+
+        # TODO: Maybe we can replace bitsandbytes_stacked_params_mapping with
+        # packed_modules_mapping.
+        def _invert_stacked_mapping(stacked_params_mapping):
+            inverse_stacked_mapping: Dict[str, List[str]] = {}
+            for orig, (
+                    packed,
+                    idx,
+            ) in self.stacked_params_mapping.items():
+                if packed not in inverse_stacked_mapping:
+                    inverse_stacked_mapping[packed] = []
+                inverse_stacked_mapping[packed].insert(idx, orig)
+            return inverse_stacked_mapping
+
+        inverse_stacked_mapping = _invert_stacked_mapping(self.stacked_params_mapping)
+
+        p= pretty.Pretty(inverse_stacked_mapping)
+        console.print(f"[bold blue on white] inverse_stacked_mapping:")
+        console.print(p)
+        p= pretty.Pretty(self.stacked_params_mapping)
+        console.print(f"[bold blue on white] self.stacked_params_mapping:")
+        console.print(p)
 
         for name, module in model.named_modules():
+            if prefix:
+                name = f"{prefix}.{name}"
+
             exclude = False
             for exclusion in self.excluded_modules:
                 if exclusion in name:
@@ -1069,21 +1096,45 @@ class BitsAndBytesModelLoader(BaseModelLoader):
                 if sub_modules := inverse_stacked_mapping.get(last_name, []):
                     # Map vllm's names to transformers' names.
                     for sub_name in sub_modules:
+                        console.print(f"replacing {last_name} with {sub_name} ")
                         self.target_modules.append(
                             name.replace(last_name, sub_name))
                 else:
+                    console.print(f"appending {name} to target_modules without replacement")
                     self.target_modules.append(name)
 
-        rich.inspect(self.maybe_fused_weights_modules, title="[reverse] Maybe Fused")
-        rich.inspect(self.column_sharded_weights_modules, title="[reverse] Column Sharded")
-        rich.inspect(self.unsharded_weights_modules, title="[reverse] Unsharded")
-        rich.inspect(self.target_modules, title="[reverse] Target Modules")
-        rich.inspect(self.excluded_modules, title="[reverse] Excluded Modules")
+        to_remove: list[str] = []
+        if prefix and subtarget:
+            for tgt in subtarget:
+                for k, v in _invert_stacked_mapping(self.stacked_params_mapping):
+                    console.print(f"inverse_stack_mapping k: {k}, v: {v}")
+                    if any(v2 in tgt for v2 in v):
+                        to_remove.append(tgt)
+
+        console.print(f"removing these target modules which may've been added by a higher layer")
+        import rich.pretty
+        console.print(rich.pretty.pprint(to_remove))
+        for r in to_remove:
+            console.print(f"removing r {r} :whale: ")
+            self.target_modules.remove(r)
+            subtarget.discard(r)
+        console.print(f"now our target modules look like this")
+        console.print(rich.pretty.pprint(self.target_modules))
+
+        console.print("[reverse] Fused Weights", rich.pretty.pprint(self.maybe_fused_weights_modules))
+        console.print("[reverse] Sharded Weights", rich.pretty.pprint(self.column_sharded_weights_modules))
+        console.print("[reverse] Unshared Weights", rich.pretty.pprint(self.unsharded_weights_modules))
+        console.print("[reverse] Target Modules", rich.pretty.pprint(self.target_modules))
+        console.print("[reverse] Subtarget", rich.pretty.pprint(subtarget))
+        console.print("[reverse] Excluded Modules", rich.pretty.pprint(self.excluded_modules))
 
         assert(self.excluded_modules.isdisjoint(self.target_modules)), "Cannot have the same module in both exclusions and inclusions!"
         assert (self.target_modules
                 ), "vllm currently does not support BNB quantization for"
         f" {type(model).__name__}"
+
+        return self.target_modules
+        # return to_remove
 
     def _load_weights(self, model_config: ModelConfig,
                       model: nn.Module) -> None:
@@ -1092,18 +1143,20 @@ class BitsAndBytesModelLoader(BaseModelLoader):
                 "The required method 'load_weights' is not defined in class"
                 f" {type(model).__name__}.")
 
-        if not hasattr(model, "bitsandbytes_stacked_params_mapping"):
+        # Modules whose weights might have fused on disk
+        # we need their output_sizes to make shard in flight correctly with TP
+        self.maybe_fused_weights_modules: Dict[str, List[int]] = {}
+        console.print(f"[bold navy_blue on yellow] calling into get_bnb_target_modules for model {type(model).__name__}")
+        tgt_modules = self._get_bnb_target_modules(model, getattr(model, "bitsandbytes_stacked_param_mapping", {}))
+        rich.inspect(model, title="Model model object post bnb")
+
+        if not tgt_modules:
             raise AttributeError(
                 f"Model {type(model).__name__} does not support BitsAndBytes "
                 "quantization yet.")
 
-        # Modules whose weights might have fused on disk
-        # we need their output_sizes to make shard in flight correctly with TP
-        self.maybe_fused_weights_modules: Dict[str, List[int]] = {}
-        self._get_bnb_target_modules(model, model_config)
-
         for name, module in model.named_modules():
-            if name not in self.target_modules and name not in self.excluded_modules:
+            if name not in self.target_modules or '.'.join(name.split('.')[:-1]) in self.excluded_modules:
                 continue
             # Some modules like `ReplicatedLinear` should not have their weights
             # sharded. The reason for implementing it this way is to avoid new
@@ -1182,7 +1235,7 @@ class BitsAndBytesModelLoader(BaseModelLoader):
             for shard_name, (
                     weight_name,
                     index,
-            ) in model.bitsandbytes_stacked_params_mapping.items():
+            ) in self.stacked_params_mapping.items():
                 shard_pos = quant_param_name.find(shard_name)
                 # Some models, such as MiniCPM V2.5/2.6, contain both
                 # module names 'kv_proj' and 'qkv_proj'. To prevent 'kv_proj'

@@ -554,7 +554,7 @@ def default_weight_loader(param: torch.Tensor,
     import rich
     console = rich.console.Console(record=True, emoji=True, no_color=False)
     console.print(f" :weight_lifter: Weight being loaded through default_weight_loader")
-    console.print(rich.pretty.Pretty(locals()))
+    # console.print(rich.pretty.Pretty(locals()))
     try:
         if param.numel() == 1 and loaded_weight.numel() == 1:
             # Sometimes scalar values aren't considered tensors with shapes

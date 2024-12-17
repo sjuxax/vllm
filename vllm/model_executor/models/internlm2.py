@@ -335,6 +335,13 @@ class InternLM2ForCausalLM(nn.Module, SupportsPP, SupportsLoRA):
     embedding_modules = {}
     embedding_padding_modules = []
 
+    bitsandbytes_stacked_params_mapping = {
+        # shard_name, weight_name, index
+        "wqkv": ("wqkv", 0),
+        "w1": ("gate_up_proj", 0),
+        "w3": ("gate_up_proj", 1),
+    }
+
     def __init__(self,
                  *,
                  vllm_config: VllmConfig,
@@ -405,6 +412,7 @@ class InternLM2ForCausalLM(nn.Module, SupportsPP, SupportsLoRA):
         ]
         params_dict = dict(self.named_parameters())
         loaded_params: Set[str] = set()
+
         for name, loaded_weight in weights:
             if "rotary_emb.inv_freq" in name:
                 continue

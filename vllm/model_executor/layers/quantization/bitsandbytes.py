@@ -133,20 +133,19 @@ class BitsAndBytesConfig(QuantizationConfig):
                          prefix: str) -> Optional["LinearMethodBase"]:
         if isinstance(layer, LinearBase):
             import rich
-            console = rich.console.Console(record=True, emoji=True, no_color=False)
-            console.print("[bold navy_blue on white] in get_quant_method for this layer.")
+            cns.print("[bold navy_blue on white] in get_quant_method for this layer.")
             try:
                 rich.inspect(layer)
             except AttributeError:
-                console.print("[blue3] Failed to inspect due to an AttributeError.")
+                cns.print("[blue3] Failed to inspect due to an AttributeError.")
             # rich.inspect(self)
             self.excluded_modules.update(self.llm_int8_skip_modules)
             all_exclusions = self.excluded_modules
             if is_layer_skipped_bnb(prefix, all_exclusions):
-                console.print(f"[bright_blue on white] layer skipping on {prefix}, :+1:")
+                cns.print(f"[bright_blue on white] layer skipping on {prefix}, :+1:")
                 return UnquantizedLinearMethod()
             else:
-                console.print(f"[bold red on grey] layer not skipping bnb, {prefix} doesn't match substring")
+                cns.print(f"[bold red on grey] layer not skipping bnb, {prefix} doesn't match substring")
                 return BitsAndBytesLinearMethod(self)
         return None
 
@@ -155,18 +154,15 @@ def is_layer_skipped_bnb(prefix: str, all_exclusions: Set[str], match_type="subs
     # Split the prefix into its dot-separated components
     components = prefix.split('.')
 
-    import rich
-    console = rich.console.Console(record=True, emoji=True, no_color=False)
     # # Check if any of the skip modules exactly matches any component
     # rich.inspect((module_name for module_name in llm_int8_skip_modules if module_name in components), title=f"matching prefixes: {prefix}")
 
     # if match_type == "substring":
     if not all_exclusions:
-        console.print(" :warning-emoji: no skip modules! ", emoji=True)
-        assert len(all_exclusions) > 0, "No skip modules! Fix initialization of the skip modules object."
+        cns.print(" :warning-emoji: no skip modules! ", emoji=True)
     for skip_mod in all_exclusions:
         if skip_mod.lower() in prefix.lower():
-            console.print(f"[gold1 on dark_red] substring match for {skip_mod.lower()} on {prefix.lower()}. 🐠 ")
+            cns.print(f"[gold1 on dark_red] substring match for {skip_mod.lower()} on {prefix.lower()}. 🐠 ")
             return True
 
 
@@ -366,6 +362,7 @@ class BitsAndBytesLinearMethod(LinearMethodBase):
             x = x.reshape(-1, x.size(-1))
             reshape_after_matmul = True
         bf_x = x.to(torch.bfloat16)
+
 
         qweight = layer.weight
         quant_states = qweight.bnb_quant_state

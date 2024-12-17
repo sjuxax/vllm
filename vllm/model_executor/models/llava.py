@@ -236,7 +236,7 @@ class LlavaLikeConfig(Protocol):
 def _get_num_hidden_layers(hf_config: LlavaLikeConfig) -> int:
     """Determine the number of hidden layers to initialize up to in the
     visual encoder.
-    
+
     Args:
         hf_config: Model config with vision feature layer(s).
     """
@@ -323,7 +323,7 @@ class LlavaForConditionalGeneration(nn.Module, SupportsMultiModal, SupportsPP):
     }
 
     bitsandbytes_excluded_modules = set([
-         f"vision_tower.transformer.layers.{i}" for i in range(2, 40, 2)
+         f"vision_tower.transformer.layers.{i}" for i in range(2, 20, 2)
     ])
 
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = "") -> None:

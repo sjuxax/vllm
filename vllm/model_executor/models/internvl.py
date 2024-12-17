@@ -479,14 +479,8 @@ input_pipeline = InternVLInputPipeline(IMG_START, IMG_END, IMG_CONTEXT)
 @INPUT_REGISTRY.register_input_processor(input_pipeline.input_processor)
 class InternVLChatModel(nn.Module, SupportsMultiModal, SupportsPP):
 
-    bitsandbytes_stacked_params_mapping = {
-        # shard_name, weight_name, index
-        "w1": ("gate_up_proj", 1),
-        "w3": ("gate_up_proj", 0),
-    }
-
     # leave every-other vision layer unquantized
-    bitsandbytes_excluded_modules: Set[str] = set([f"vision_model.encoder.layers.{i}." for i in range(0, 40, 4)])
+    bitsandbytes_excluded_modules: set[str] = set([f"vision_model.encoder.layers.{i}." for i in range(0, 20, 2)])
 
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = "") -> None:
         super().__init__()
@@ -525,6 +519,11 @@ class InternVLChatModel(nn.Module, SupportsMultiModal, SupportsPP):
             hf_config=config.text_config,
             prefix=maybe_prefix(prefix, "language_model"),
         )
+
+        lang_bnb_mapping = getattr(self.language_model.__class__, 'bitsandbytes_stacked_params_mapping', None)
+        if lang_bnb_mapping:
+            console.print("[bold yellow on grey0] got a lang_bnb_mapping")
+
 
         self.mlp1 = self._init_mlp1(config)
 
