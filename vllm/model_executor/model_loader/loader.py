@@ -1146,8 +1146,12 @@ class BitsAndBytesModelLoader(BaseModelLoader):
         # Modules whose weights might have fused on disk
         # we need their output_sizes to make shard in flight correctly with TP
         self.maybe_fused_weights_modules: Dict[str, List[int]] = {}
-        console.print(f"[bold navy_blue on yellow] calling into get_bnb_target_modules for model {type(model).__name__}")
-        tgt_modules = self._get_bnb_target_modules(model, getattr(model, "bitsandbytes_stacked_param_mapping", {}))
+        console.print(
+            f"[bold navy_blue on yellow] calling into get_bnb_target_modules for model {type(model).__name__}"
+        )
+        tgt_modules = self._get_bnb_target_modules(
+            model, getattr(model, "bitsandbytes_stacked_params_mapping", {})
+        )
         rich.inspect(model, title="Model model object post bnb")
 
         if not tgt_modules:
