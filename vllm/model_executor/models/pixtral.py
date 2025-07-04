@@ -54,7 +54,9 @@ from .interfaces import MultiModalEmbeddings, SupportsMultiModal, SupportsPP
 from .utils import flatten_bn, init_vllm_registered_model, maybe_prefix
 from .vision import VisionEncoderInfo, resolve_visual_encoder_outputs
 
-import logging
+from vllm.logger import init_logger
+
+logger = init_logger(__name__)
 import os
 logger = logging.getLogger(__name__)
 logger.setLevel(os.getenv("VLLM_LOGGING_LEVEL", "INFO"))
