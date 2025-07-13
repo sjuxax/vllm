@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 import json
+import threading
 from collections.abc import Sequence
 from enum import Enum
 from random import choices
@@ -76,15 +77,10 @@ class MistralToolParser(ToolParser):
         # streaming mode
         self.json_decoder: json.JSONDecoder = json.JSONDecoder()
 
-        # Optimized regex patterns
-        self.tool_call_first_attribute_name: re.Pattern[str] = re.compile(
-            r'.*\s*"name"\s*:\s*')
-        self.string_value_pattern: re.Pattern[str] = re.compile(
-            r'\s*"(.*?)(?<!\\)"')
-        # - Lazy quantifier (.*?) to stop at first unescaped quote
-        # - Negative lookbehind (?<!\\) to avoid escaped quotes
-        self.tool_call_first_attribute_arguments: re.Pattern[str] = re.compile(
-            r'.*\s*"arguments"\s*:\s*{')
+        # Optimized regex patterns - compiled lazily when needed
+        self._tool_call_first_attribute_name: re.Pattern[str] = None
+        self._string_value_pattern: re.Pattern[str] = None
+        self._tool_call_first_attribute_arguments: re.Pattern[str] = None
 
         # Core streaming state
         self.raw_tool_calls: str = ""
@@ -109,7 +105,8 @@ class MistralToolParser(ToolParser):
         self.current_tool_name_sent: bool = False
         self.prev_args_sent: str = ""
 
-        # Caching for performance
+        # Caching for performance with thread safety
+        self._cache_lock = threading.Lock()
         self._last_json_parse_input: str = ""
         self._last_json_parse_result: tuple[bool, int] = (False, -1)
         self.bot_token = "[TOOL_CALLS]"
@@ -125,6 +122,24 @@ class MistralToolParser(ToolParser):
             raise RuntimeError(
                 "Mistral Tool Parser could not locate the tool call token in "
                 "the tokenizer!")
+    
+    @property
+    def tool_call_first_attribute_name(self) -> re.Pattern[str]:
+        if self._tool_call_first_attribute_name is None:
+            self._tool_call_first_attribute_name = re.compile(r'.*\s*"name"\s*:\s*')
+        return self._tool_call_first_attribute_name
+    
+    @property
+    def string_value_pattern(self) -> re.Pattern[str]:
+        if self._string_value_pattern is None:
+            self._string_value_pattern = re.compile(r'\s*"(.*?)(?<!\\)"')
+        return self._string_value_pattern
+    
+    @property
+    def tool_call_first_attribute_arguments(self) -> re.Pattern[str]:
+        if self._tool_call_first_attribute_arguments is None:
+            self._tool_call_first_attribute_arguments = re.compile(r'.*\s*"arguments"\s*:\s*{')
+        return self._tool_call_first_attribute_arguments
 
     def _extract_tool_calls_streaming_v11(
             self, additional_content: str,
@@ -142,7 +157,12 @@ class MistralToolParser(ToolParser):
 
         result_tool_calls: list[DeltaToolCall] = []
 
-        while True:
+        # Prevent infinite loops with a reasonable iteration limit
+        max_iterations = 100
+        iteration_count = 0
+        
+        while iteration_count < max_iterations:
+            iteration_count += 1
             advanced = False
             if self.current_tool_name_finished and \
                 self.current_tool_arguments_finished and \
@@ -248,6 +268,9 @@ class MistralToolParser(ToolParser):
 
             if not sent_something and not advanced:
                 break
+        
+        if iteration_count >= max_iterations:
+            logger.warning("v11 streaming: hit iteration limit, breaking loop")
 
         if result_tool_calls:
             return DeltaMessage(
@@ -299,6 +322,33 @@ class MistralToolParser(ToolParser):
         self.current_tool_arguments_finished = False
         self.current_tool_name_sent = False
         self.prev_args_sent = ""
+        
+    def _validate_and_reset_state_on_error(self) -> None:
+        """Validate state consistency and reset if corrupted."""
+        # Check for inconsistent state combinations
+        if (self.current_tool_id >= 0 and 
+            self.current_tool_start_index < 0):
+            logger.warning("Inconsistent tool parsing state detected, resetting")
+            self._reset_all_state()
+            
+    def _reset_all_state(self) -> None:
+        """Reset all parsing state to initial values."""
+        self.raw_tool_calls = ""
+        self.streaming_state = StreamingState.WAITING_FOR_TOOL_START
+        self.current_tool_id = -1
+        self.current_tool_start_index = -1
+        self.current_attribute_start_index = -1
+        self.previous_attribute_end_index = 0
+        self.current_element_streaming = None
+        self.current_tool_name_finished = False
+        self.current_tool_arguments_finished = False
+        self.tools_parsing_finished = False
+        self.v11_tool_format = False
+        self.current_tool_name_sent = False
+        self.prev_args_sent = ""
+        with self._cache_lock:
+            self._last_json_parse_input = ""
+            self._last_json_parse_result = (False, -1)
 
     def _determine_next_parsing_element(self) \
         -> Union[Literal["name", "arguments"], None]:
@@ -410,19 +460,20 @@ class MistralToolParser(ToolParser):
         Returns:
             Tuple of (success, end_index)
         """
-        if text == self._last_json_parse_input:
-            return self._last_json_parse_result
+        with self._cache_lock:
+            if text == self._last_json_parse_input:
+                return self._last_json_parse_result
 
-        try:
-            _, end_index = self.json_decoder.raw_decode(text)
-            result = (True, end_index)
-        except json.decoder.JSONDecodeError:
-            result = (False, -1)
+            try:
+                _, end_index = self.json_decoder.raw_decode(text)
+                result = (True, end_index)
+            except json.decoder.JSONDecodeError:
+                result = (False, -1)
 
-        # Cache the result
-        self._last_json_parse_input = text
-        self._last_json_parse_result = result
-        return result
+            # Cache the result
+            self._last_json_parse_input = text
+            self._last_json_parse_result = result
+            return result
 
     def _extracted_complete_name(
             self, current_attribute_start_index: int) \
@@ -643,9 +694,19 @@ class MistralToolParser(ToolParser):
                 tool_calls=tool_calls,
                 content=content if len(content) > 0 else None)
 
-        except Exception:
-            logger.exception("Error in extracting tool call from response.")
-            # return information to just treat the tool call as regular JSON
+        except json.JSONDecodeError as e:
+            logger.warning("JSON decode error in tool call extraction: %s", e)
+            return ExtractedToolCallInformation(tools_called=False,
+                                                tool_calls=[],
+                                                content=tool_content)
+        except (KeyError, TypeError, ValueError) as e:
+            logger.warning("Data structure error in tool call extraction: %s", e)
+            return ExtractedToolCallInformation(tools_called=False,
+                                                tool_calls=[],
+                                                content=tool_content)
+        except Exception as e:
+            logger.error("Unexpected error in extracting tool call from response: %s", e)
+            # For unexpected errors, still return the content but log as error
             return ExtractedToolCallInformation(tools_called=False,
                                                 tool_calls=[],
                                                 content=tool_content)
@@ -660,6 +721,9 @@ class MistralToolParser(ToolParser):
         delta_token_ids: Sequence[int],
         request: ChatCompletionRequest,
     ) -> Union[DeltaMessage, None]:
+
+        # Validate and potentially reset state on error
+        self._validate_and_reset_state_on_error()
 
         # Early return if no tool call token present
         if self.bot_token not in current_text:
