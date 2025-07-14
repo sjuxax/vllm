@@ -325,11 +325,13 @@ class MistralToolParser(ToolParser):
         
     def _validate_and_reset_state_on_error(self) -> None:
         """Validate state consistency and reset if corrupted."""
-        # Check for inconsistent state combinations
-        if (self.current_tool_id >= 0 and 
-            self.current_tool_start_index < 0):
-            logger.warning("Inconsistent tool parsing state detected, resetting")
-            self._reset_all_state()
+        # Only validate for legacy format, not v11 format
+        if not self.v11_tool_format:
+            # Check for inconsistent state combinations in legacy format
+            if (self.current_tool_id >= 0 and 
+                self.current_tool_start_index < 0):
+                logger.warning("Inconsistent tool parsing state detected, resetting")
+                self._reset_all_state()
             
     def _reset_all_state(self) -> None:
         """Reset all parsing state to initial values."""
@@ -721,9 +723,6 @@ class MistralToolParser(ToolParser):
         delta_token_ids: Sequence[int],
         request: ChatCompletionRequest,
     ) -> Union[DeltaMessage, None]:
-
-        # Validate and potentially reset state on error
-        self._validate_and_reset_state_on_error()
 
         # Early return if no tool call token present
         if self.bot_token not in current_text:
