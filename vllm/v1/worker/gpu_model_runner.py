@@ -3043,7 +3043,11 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
             assert not uniform_decode
             # Create mixed batch:
             # first half decode tokens, second half one prefill
-            num_decode_tokens = num_tokens // 2
+            # Ensure we do not exceed max_num_reqs. We allocate up to
+            # (max_num_reqs - 1) decode requests plus one prefill request.
+            proposed_decode_tokens = num_tokens // 2
+            max_decode_reqs = max(0, max_num_reqs - 1)
+            num_decode_tokens = min(proposed_decode_tokens, max_decode_reqs)
             num_prefill_tokens = num_tokens - num_decode_tokens
             num_reqs = num_decode_tokens + 1
 
